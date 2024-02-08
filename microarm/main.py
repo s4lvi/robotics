@@ -1,81 +1,54 @@
+import ikpy.chain
+import ikpy.utils.plot as plot_utils
+
+import numpy as np
 import time
 import math
-from servo import Servo, servo2040
 
-# Define the segment lengths of the robot arm
-L1 = 5.0  # length of the base segment
-L2 = 7.0  # length of the shoulder segment
-L3 = 5.0  # length of the elbow segment
-L4 = 3.0  # length of the wrist segment
+import serial
 
-# Define the minimum and maximum angles for each joint
-MIN_ANGLE_BASE = -90
-MAX_ANGLE_BASE = 90
-MIN_ANGLE_SHOULDER = -90
-MAX_ANGLE_SHOULDER = 90
-MIN_ANGLE_ELBOW = -90
-MAX_ANGLE_ELBOW = 90
-MIN_ANGLE_WRIST = -90
-MAX_ANGLE_WRIST = 90
 
-# Create a list of servos for each joint of the robot arm
-pwm_base = servo2040.SERVO_1
-pwm_shoulder = servo2040.SERVO_2
-pwm_elbow = servo2040.SERVO_3
-pwm_wrist = servo2040.SERVO_4
-servos = [Servo(i) for i in [pwm_base, pwm_shoulder, pwm_elbow, pwm_wrist]]
+import asyncio
 
-# Enable all servos (this puts them at the middle)
-for s in servos:
-    s.enable()
-time.sleep(2)
 
-# Define the target coordinates for the end effector
-x = 6.0
-y = 3.0
-z = 8.0
+my_chain = ikpy.chain.Chain.from_urdf_file("arm_urdf.urdf",active_links_mask=[False, True, True, True, True, True, True])
 
-# Compute the joint angles using inverse kinematics
-# Calculate the angle of the base joint
-base_angle = math.degrees(math.atan2(y, x))
+ser = serial.Serial('COM3',9600, timeout=1)
 
-# Calculate the distance from the base joint to the end effector
-d = math.sqrt(x**2 + y**2) - L4
+def sendCommand(a,b,c,d,e,f,move_time):
+    command = '0{:.2f} 1{:.2f} 2{:.2f} 3{:.2f} 4{:.2f} 5{:.2f} t{:.2f}\n'.format(math.degrees(a),math.degrees(b),math.degrees(c),math.degrees(d),math.degrees(e),math.degrees(f),move_time)
+    ser.write(command.encode('ASCII'))
 
-# Calculate the angle of the shoulder joint
-a = math.sqrt(d**2 + z**2)
-b = math.sqrt(L2**2 + L3**2)
-c = math.sqrt(d**2 + (z - L1)**2)
-shoulder_angle = math.degrees(math.acos((a**2 + b**2 - c**2) / (2 * a * b)) - math.atan2(z - L1, d))
+def doIK():
+    global ik
+    old_position= ik.copy()
+    ik = my_chain.inverse_kinematics(target_position, target_orientation, orientation_mode="Z", initial_position=old_position)
 
-# Calculate the angle of the elbow joint
-elbow_angle = math.degrees(math.acos((b**2 + c**2 - a**2) / (2 * b * c))) - 90
+    
+def move(x,y,z):
+    global target_position
+    target_position = [x,y,z]
+    doIK()
 
-# Calculate the angle of the wrist joint
-wrist_angle = math.degrees(math.atan2(z - L1 - a * math.sin(math.radians(shoulder_angle)), d + a * math.cos(math.radians(shoulder_angle)))) - shoulder_angle - elbow_angle
+    sendCommand(ik[1].item(),ik[2].item(),ik[3].item(),ik[4].item(),ik[5].item(),ik[6].item(),1)
 
-# Clip the joint angles to the minimum and maximum values
-base_angle = min(max(base_angle, MIN_ANGLE_BASE), MAX_ANGLE_BASE)
-shoulder_angle = min(max(shoulder_angle, MIN_ANGLE_SHOULDER), MAX_ANGLE_SHOULDER)
-elbow_angle = min(max(elbow_angle, MIN_ANGLE_ELBOW), MAX_ANGLE_ELBOW)
-wrist_angle = min(max(wrist_angle, MIN_ANGLE_WRIST), MAX_ANGLE_WRIST)
+async def main():
+    x=0
+    y=0.25
+    z=0.1
+    while con.buttons[9].value<1:
+        xp=con.axes[0].value
+        yp=con.axes[1].value
+        zp=con.axes[2].value
+        if(abs(xp)>0.1 or abs(yp)>0.1 or abs(zp)>0.1):
+            x=x+xp/100
+            y=y-yp/100
+            z=z-zp/100
+            move(x,y,z)
+        await asyncio.sleep(0.05)
 
-# Convert the joint angles to PWM duty cycles
-base_duty = int((base_angle / 180) * 1000) + 500
-shoulder_duty = int((shoulder_angle / 180) * 1000) + 500
-elbow_duty = int((elbow_angle / 180) * 1000) + 500
-wrist_duty = int((wrist_angle / 180) * 1000) + 500
 
-# Set the servo positions to the computed duty cycles
-servos[0].duty(base_duty)
-servos[1].duty(shoulder_duty)
-servos[2].duty(elbow_duty)
-servos[3].duty(wrist_duty)
+loop = asyncio.get_event_loop()
+loop.create_task(main())
 
-# Wait for the servos to move
-time.sleep(1)
-
-# Disable the servos
-for s in servos:
-    s.disable()
-
+ser.close() 
